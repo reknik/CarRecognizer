@@ -43,15 +43,18 @@ public class ImageProcessingService {
     List<Integer> indicesList = indices.toList();
 
     for (int i = 0; i < boxes.size(); i++) {
+      //se iau doar elementele determinate ca fiind mai de incredere
       if (indicesList.contains(i)) {
         Rect2d box = boxes.get(i);
+        //se taie portiunea din imagine asociata elementului
         Rect roi = new Rect((int) box.x, (int) box.y, (int) box.height, (int) box.width);
         Mat car = imageMatrix.submat(roi);
         Mat inrange = new Mat();
-        int redPixels = 0;
+        int colorPixels = 0;
+        //se verifica valorile pixelilor
         Core.inRange(car, new Scalar(87, 87, 111), new Scalar(180, 255, 255), inrange);
-        redPixels += Core.countNonZero(inrange);
-        if (redPixels > (inrange.total() / 4)) {
+        colorPixels += Core.countNonZero(inrange);
+        if (colorPixels > (inrange.total() / 4)) {
           return true;
         }
       }
@@ -74,6 +77,7 @@ public class ImageProcessingService {
     } catch (IOException e) {
       throw new IllegalArgumentException("Couldn't process image", e);
     }
+
     imageMatrix.put(0, 0, ((DataBufferByte) image.getRaster().getDataBuffer()).getData());
     String text = getLicensePlateText(imageMatrix);
 
@@ -91,9 +95,8 @@ public class ImageProcessingService {
     List<Rect2d> boxes = result.getBoxes();
     List<Float> confidences = result.getConfidences();
 
-    // -- Now , do so-called “non-maxima suppression”
-    //Non-maximum suppression is performed on the boxes whose confidence is equal to or greater than the threshold.
-    // This will reduce the number of overlapping boxes:
+    //Non-maximum supression
+    //Se aleg indicii elementelor ce au cea mai mare incredere si care nu se intersecteaza
     MatOfInt indices = getBBoxIndicesFromNonMaximumSuppression(boxes,
         confidences);
 
@@ -102,11 +105,9 @@ public class ImageProcessingService {
 
   private Net getNeuralNetwork() {
     Net dnnNet = Dnn.readNetFromDarknet(yoloV3CfgPath, yoloV3WeightsPath);
-    dnnNet.setPreferableBackend(Dnn.DNN_BACKEND_CUDA);
-    dnnNet.setPreferableTarget(Dnn.DNN_TARGET_CUDA);
-    // YOLO on GPU:
-    dnnNet.setPreferableBackend(Dnn.DNN_BACKEND_CUDA);
-    dnnNet.setPreferableTarget(Dnn.DNN_TARGET_CUDA);
+    //Procesarea se face mai rapid pe placa video din cauza paralelizarii mai bune cu ajutorul CUDA
+    //    dnnNet.setPreferableBackend(Dnn.DNN_BACKEND_CUDA);
+    //    dnnNet.setPreferableTarget(Dnn.DNN_TARGET_CUDA);
     return dnnNet;
   }
 
@@ -120,21 +121,15 @@ public class ImageProcessingService {
       outputLayers.add(layerNames.get(i - 1));
     }
 
-    Mat neuralNetworkImage = Dnn.blobFromImage(img, 1 / 255.0, new Size(416, 416), // Here we supply the spatial size
-        // that the Convolutional Neural Network expects.
+    //Se creaza matricea de pixeli ce poate fi citita de reteaua neuronala
+    Mat neuralNetworkImage = Dnn.blobFromImage(img, 1 / 255.0, new Size(416, 416),
         new Scalar(new double[]{0.0, 0.0, 0.0}), true, false);
+
     dnnNet.setInput(neuralNetworkImage);
 
     List<Mat> outputs = new ArrayList<>();
 
     dnnNet.forward(outputs, outputLayers);
-
-    // --Each output of the network outs (ie, each row of the Mat from 'outputs') is represented by a vector of the
-    // number
-    // of classes + 5 elements.  The first 4 elements represent center_x, center_y, width and height.
-    // The fifth element represents the confidence that the bounding box encloses the object.
-    // The remaining elements are the confidence levels (ie object types) associated with each class.
-    // The box is assigned to the category corresponding to the highest score of the box:
 
     for (Mat output : outputs) {
       for (int i = 0; i < output.rows(); i++) {
@@ -190,19 +185,19 @@ public class ImageProcessingService {
       return null;
     }
 
-    String text = "";
+    StringBuilder text = new StringBuilder("");
 
     Tesseract tesseract = new Tesseract();
     for (Mat licensePlateCandidate : licensePlateCandidates) {
       String licensePlateText;
       try {
         licensePlateText = tesseract.doOCR(toBufferedImage(licensePlateCandidate));
-        text.concat(licensePlateText.replaceAll("[^a-zA-Z0-9]", "").toUpperCase());
+        text.append(licensePlateText.replaceAll("[^a-zA-Z0-9]", "").toUpperCase());
       } catch (TesseractException e) {
         throw new RuntimeException(e);
       }
     }
-    return text;
+    return text.toString();
   }
 
   private List<MatOfPoint> locateLicenseContour(Mat grayScale) {
@@ -211,17 +206,19 @@ public class ImageProcessingService {
     //Determinam obiectele intunecate in zone luminate e.g. text-ul placutei
     Imgproc.morphologyEx(grayScale, blackHat, Imgproc.MORPH_BLACKHAT, blackHatRect);
 
-//    HighGui.imshow("Blackhat", blackHat);
-//    HighGui.waitKey();
+    HighGui.imshow("Blackhat", blackHat);
+    HighGui.waitKey();
 
     //Determinam obiectele intunecate, reducem zgomotul si dupa aplicam o transformare binara folosind metoda lui otsu
     Mat squareRect = Imgproc.getStructuringElement(Imgproc.MORPH_RECT, new Size(3, 3));
     Mat light = new Mat();
     Imgproc.morphologyEx(grayScale, light, Imgproc.MORPH_CLOSE, squareRect);
     Imgproc.threshold(light, light, 0, 255, Imgproc.THRESH_BINARY | Imgproc.THRESH_OTSU);
-//    HighGui.imshow("Light", light);
-//    HighGui.waitKey();
+    HighGui.imshow("Light", light);
+    HighGui.waitKey();
     Mat gradX = new Mat();
+
+    //Folosind Sobel, se detecteaza conturul obiectelor din zonele intunecate
     Imgproc.Sobel(blackHat, gradX, CvType.CV_32F, 1, 0, -1);
     Core.absdiff(gradX, Scalar.all(0), gradX);
     Core.MinMaxLocResult result = Core.minMaxLoc(gradX);
@@ -229,26 +226,34 @@ public class ImageProcessingService {
     Core.divide(gradX, new Scalar(result.maxVal - result.minVal), gradX);
     Core.multiply(gradX, new Scalar(255), gradX);
     gradX.convertTo(gradX, CvType.CV_8UC1);
-//    HighGui.imshow("Scharr", gradX);
-//    HighGui.waitKey();
-    Imgproc.GaussianBlur(gradX, gradX, new Size(41, 7), 0);
+    HighGui.imshow("Sobel", gradX);
+    HighGui.waitKey();
+
+    //Se netezeste imaginea si se aplica transformarea binara otsu din nou
+    Imgproc.GaussianBlur(gradX, gradX, new Size(41, 13), 0);
     Imgproc.morphologyEx(gradX, gradX, Imgproc.MORPH_CLOSE, blackHatRect);
     Mat threshold = new Mat();
     Imgproc.threshold(gradX, threshold, 0, 255, Imgproc.THRESH_BINARY | Imgproc.THRESH_OTSU);
-//    HighGui.imshow("Grad Thresh", threshold);
-//    HighGui.waitKey();
+    HighGui.imshow("Grad Thresh", threshold);
+    HighGui.waitKey();
+
+    //Se reduce din zgomot
     Imgproc.erode(threshold, threshold, new Mat(), new Point(), 2);
     Imgproc.dilate(threshold, threshold, new Mat(), new Point(), 2);
-//    HighGui.imshow("Grad Erode Dilate", threshold);
-//    HighGui.waitKey();
+    HighGui.imshow("Grad Erode Dilate", threshold);
+    HighGui.waitKey();
+
+    //Se suprapun zonele luminate
     Core.bitwise_and(threshold, threshold, light);
     Imgproc.dilate(threshold, threshold, new Mat(), new Point(), 2);
     Imgproc.erode(threshold, threshold, new Mat(), new Point(), 1);
-//    HighGui.imshow("Final", threshold);
-//    HighGui.waitKey();
+    HighGui.imshow("Final", threshold);
+    HighGui.waitKey();
     List<MatOfPoint> contours = new ArrayList<>();
     Mat copy = new Mat();
     threshold.copyTo(copy);
+
+    //se cauta contururile si se sorteaza
     Imgproc.findContours(copy, contours, new Mat(), Imgproc.RETR_EXTERNAL, Imgproc.CHAIN_APPROX_SIMPLE);
     contours.sort(Comparator.comparing(contour -> Imgproc.contourArea((Mat) contour), Double::compareTo).reversed());
     return contours;
